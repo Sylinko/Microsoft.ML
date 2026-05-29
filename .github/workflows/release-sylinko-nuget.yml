@@ -1,0 +1,89 @@
+name: Release Sylinko NuGet Packages
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Package version, for example 6.0.0. Defaults to the pushed tag without the leading v.'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          if [[ -n "${{ inputs.version }}" ]]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+
+          if [[ -z "$version" || "$version" == refs/* ]]; then
+            echo "Unable to resolve package version from input or tag." >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release-tag=nuget/Microsoft.ML/$version" >> "$GITHUB_OUTPUT"
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 11.0.100-preview.3.26170.106
+
+      - name: Pack Microsoft.ML.Tokenizers
+        run: >-
+          dotnet pack ./src/Microsoft.ML.Tokenizers/Microsoft.ML.Tokenizers.csproj
+          --configuration Release
+          /p:ApiCompatGenerateSuppressionFile=true
+          /p:Version=${{ steps.version.outputs.version }}
+          /p:PackageVersion=${{ steps.version.outputs.version }}
+
+      - name: Pack Microsoft.ML.Tokenizers.Data.O200kBase
+        run: >-
+          dotnet pack ./src/Microsoft.ML.Tokenizers.Data.O200kBase/Microsoft.ML.Tokenizers.Data.O200kBase.csproj
+          --configuration Release
+          /p:ApiCompatGenerateSuppressionFile=true
+          /p:Version=${{ steps.version.outputs.version }}
+          /p:PackageVersion=${{ steps.version.outputs.version }}
+
+      - name: Collect package assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="artifacts/sylinko-release"
+          source="artifacts/packages/Release/Shipping"
+          version="${{ steps.version.outputs.version }}"
+
+          rm -rf "$output"
+          mkdir -p "$output"
+
+          cp "$source/Microsoft.ML.Tokenizers.$version.nupkg" "$output/"
+          cp "$source/Microsoft.ML.Tokenizers.$version.symbols.nupkg" "$output/"
+          cp "$source/Microsoft.ML.Tokenizers.Data.O200kBase.$version.nupkg" "$output/"
+          cp "$source/Microsoft.ML.Tokenizers.Data.O200kBase.$version.symbols.nupkg" "$output/"
+
+          ls -la "$output"
+
+      - name: Release to Sylinko NuGet feed
+        uses: Sylinko/nuget-feed@v1
+        with:
+          token: ${{ secrets.SYLINKO_NUGET_FEED_TOKEN }}
+          release-tag: ${{ steps.version.outputs.release-tag }}
+          artifacts-directory: artifacts/sylinko-release
